@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Photo Wall Slideshow</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body { overflow: hidden; height: 100vh; }
+    .stage { position: fixed; inset: 0; z-index: 1; }
+    .title, .caption, .qrbox, .new, .waiting, .tip { z-index: 2; }
+    .slide { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 1.2s ease; }
+    .slide.show { opacity: 1; }
+    .slide img { max-width: 92vw; max-height: 86vh; border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,.6); border: 6px solid var(--gold); }
+    .caption { position: fixed; left: 28px; bottom: 24px; font-size: 26px; color: var(--cream); text-shadow: 0 2px 8px #000; }
+    .qrbox { position: fixed; right: 24px; bottom: 24px; background: #fff; color: #1b1035; border-radius: 16px; padding: 12px; text-align: center; font-weight: 700; font-size: 16px; }
+    .qrbox #qr { margin: 0 auto 6px; }
+    .title { position: fixed; top: 18px; left: 0; right: 0; text-align: center; font-size: 30px; color: var(--gold); text-shadow: 0 2px 8px #000; }
+    .waiting { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; font-size: 30px; color: var(--muted); }
+    .new { position: fixed; top: 70px; right: 24px; background: var(--pink); color: #fff; padding: 8px 16px; border-radius: 999px; font-weight: 700; opacity: 0; transition: opacity .4s; }
+    .new.on { opacity: 1; }
+    .tip { position: fixed; top: 8px; right: 12px; font-size: 12px; color: var(--muted); opacity: .6; }
+  </style>
+</head>
+<body>
+  <div class="title" id="title">🪔 Photo Wall 🪔</div>
+  <div class="stage" id="stage"></div>
+  <div class="waiting" id="waiting"><div style="font-size:70px">📸</div>Scan the QR code and share your photos!</div>
+  <div class="caption" id="caption"></div>
+  <div class="new" id="newBadge">✨ New photo!</div>
+  <div class="qrbox"><div id="qr"></div>Scan to add your photos</div>
+  <div class="tip">Press F11 for full screen</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script src="fireworks.js"></script>
+  <script>
+    const ES = window.EventSnap;
+    const $ = (id) => document.getElementById(id);
+    Fireworks.start({ rate: 0.7 });
+    new QRCode($('qr'), { text: ES.pageUrl('index.html'), width: 150, height: 150, correctLevel: QRCode.CorrectLevel.M });
+    ES.getEvent().then((ev) => {
+      if (ev) $('title').textContent = '🪔 ' + ev.name + ' 🪔';
+      const state = ES.eventState(ev);
+      if (state === 'ended' || state === 'missing') {
+        $('waiting').lastChild.textContent = 'This event has ended. Thank you!';
+        document.querySelector('.qrbox').hidden = true;
+      } else if (state === 'viewOnly') {
+        document.querySelector('.qrbox').hidden = true;
+      }
+    }).catch(() => {});
+
+    let photos = [];        // newest first
+    let seen = new Set();
+    let queue = [];         // brand-new photos jump the line
+    let idx = 0;
+    let current = null;
+    const SLIDE_MS = 6000;
+
+    function update(list) {
+      const fresh = list.filter((p) => !seen.has(p.id));
+      if (seen.size && fresh.length) {
+        queue.push(...fresh.reverse());
+        $('newBadge').classList.add('on');
+        Fireworks.burst(4);
+        setTimeout(() => $('newBadge').classList.remove('on'), 3000);
+      }
+      list.forEach((p) => seen.add(p.id));
+      photos = list;
+      $('waiting').hidden = list.length > 0;
+      if (!current && list.length) next();
+    }
+
+    function next() {
+      if (!photos.length) { current = null; return; }
+      let p;
+      if (queue.length) p = queue.shift();
+      else { idx = idx % photos.length; p = photos[idx++]; }
+      const pre = new Image();
+      pre.onload = () => show(p);
+      pre.onerror = () => setTimeout(next, 500);
+      pre.src = p.url;
+    }
+
+    function show(p) {
+      const el = document.createElement('div');
+      el.className = 'slide';
+      const img = document.createElement('img');
+      img.src = p.url;
+      img.alt = '';
+      el.appendChild(img);
+      $('stage').appendChild(el);
+      requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
+      if (current) { const old = current; old.classList.remove('show'); setTimeout(() => old.remove(), 1400); }
+      current = el;
+      $('caption').textContent = p.uploader ? '📷 ' + p.uploader : '';
+      setTimeout(next, SLIDE_MS);
+    }
+
+    ES.watchPhotos(update, 5000);
+  </script>
+</body>
+</html>

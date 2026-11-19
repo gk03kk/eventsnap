@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Photo Wall QR Poster</title>
+  <style>
+    @page { size: A4; margin: 0; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #ddd; }
+    .page {
+      width: 210mm; height: 297mm; margin: 10mm auto; background: #1b1035; color: #fff4dd;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+      padding: 20mm; position: relative; overflow: hidden;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    .page::before, .page::after { content: '✨🪔✨🪔✨🪔✨'; position: absolute; left: 0; right: 0; font-size: 32px; letter-spacing: 10px; }
+    .page::before { top: 12mm; }
+    .page::after { bottom: 12mm; }
+    h1 { font-size: 46px; color: #f5b942; margin: 0 0 6mm; }
+    .lead { font-size: 26px; margin: 0 0 10mm; }
+    .qr { background: #fff; padding: 8mm; border-radius: 8mm; }
+    .steps { font-size: 22px; margin-top: 10mm; line-height: 1.7; }
+    .noapp { margin-top: 6mm; display: inline-block; background: #ff7a1a; color: #fff; font-weight: 700; padding: 3mm 8mm; border-radius: 99px; font-size: 20px; }
+    .url { margin-top: 6mm; font-size: 13px; color: #c9b8e8; word-break: break-all; }
+    .toolbar { text-align: center; padding: 12px; }
+    .toolbar button { font-size: 16px; padding: 10px 20px; border-radius: 99px; border: 0; background: #ff7a1a; color: #fff; cursor: pointer; }
+    @media print { body { background: none; } .toolbar { display: none; } .page { margin: 0; } }
+  </style>
+</head>
+<body>
+  <div class="toolbar"><button onclick="window.print()">🖨️ Print poster</button></div>
+  <div class="page">
+    <h1 id="name">Photo Wall</h1>
+    <p class="lead">Share your photos with everyone!</p>
+    <div class="qr" id="qr"></div>
+    <div class="steps">1. Open your phone camera<br>2. Point it at this code<br>3. Add your photos 📸</div>
+    <div class="noapp">No app needed</div>
+    <div class="steps" id="until" style="font-size:16px;margin-top:5mm"></div>
+    <div class="url" id="url"></div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    const ES = window.EventSnap;
+    const link = ES.pageUrl('index.html');
+    new QRCode(document.getElementById('qr'), { text: link, width: 300, height: 300, correctLevel: QRCode.CorrectLevel.M });
+    document.getElementById('url').textContent = link;
+    ES.getEvent().then((ev) => {
+      if (!ev) return;
+      document.getElementById('name').textContent = '🪔 ' + ev.name;
+      document.getElementById('until').textContent = 'Add photos until ' + ES.formatWhen(ev.uploads_until, true) +
+        ' · Photos deleted after ' + ES.formatWhen(ev.view_until, false);
+    }).catch(() => {});
+  </script>
+</body>
+</html>

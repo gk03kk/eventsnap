@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1b1035">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Diwali Photo Wall</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="demoBanner" class="demo-banner" hidden>Demo mode: photos stay in this browser only</div>
+  <div class="lights" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="wrap">
+    <header class="hero">
+      <div class="diyas" aria-hidden="true"><span>🪔</span>✨<span>🪔</span></div>
+      <h1 id="eventName">Photo Wall</h1>
+      <p class="sub">Share your photos. Everyone sees them live!</p>
+    </header>
+
+    <p id="windows" class="windows" hidden></p>
+
+    <div id="closed" class="card" hidden>
+      <p id="closedText" style="margin:0;text-align:center">This photo wall isn't open. Please check the QR code.</p>
+    </div>
+
+    <div id="uploadsClosed" class="card" hidden>
+      <p style="margin:0;text-align:center">📪 Uploads are closed. Thank you for sharing!<br>
+        <span class="sub">You can still look at and save the photos below.</span></p>
+    </div>
+
+    <section id="uploader" class="card" hidden>
+      <label class="field" for="name">Your name (optional)</label>
+      <input id="name" type="text" maxlength="40" placeholder="e.g. Priya" autocomplete="given-name">
+      <input id="file" type="file" accept="image/*" multiple hidden>
+      <label class="consent">
+        <input id="consent" type="checkbox">
+        <span>I agree to share these photos with the people at this event. I have permission from anyone clearly shown, and from a parent for any child.</span>
+      </label>
+      <p id="consentErr" class="bad" hidden>Please tick the box first.</p>
+      <button id="pick" class="btn" type="button">📸 Add photos</button>
+      <p class="hint">Take a new photo or pick from your gallery. No app needed.</p>
+      <div id="progress" class="progress" aria-live="polite"></div>
+    </section>
+
+    <section id="gallery" hidden>
+      <div class="gallery-head">
+        <h2>Live gallery</h2>
+        <span id="count" class="count"></span>
+      </div>
+      <div id="grid" class="grid"></div>
+      <p id="empty" class="empty" hidden>No photos yet. Be the first! 🎆</p>
+    </section>
+    <div id="loadError" class="error-box" hidden></div>
+
+    <footer>
+      <strong>Your privacy:</strong> photos are only for this event and visible to people who have this link.
+      Stored in the EU, never sold, no ads, not used to train AI, and deleted after
+      <span id="deleteDate">the event</span>.
+      Want a photo removed? Tell the organiser and it's taken down.
+    </footer>
+  </div>
+
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true">
+    <button class="close" id="lbClose" aria-label="Close">×</button>
+    <div class="lb-count" id="lbCount"></div>
+    <button class="nav prev" id="lbPrev" aria-label="Previous photo">‹</button>
+    <button class="nav next" id="lbNext" aria-label="Next photo">›</button>
+    <img id="lbImg" alt="">
+    <div class="lb-hint" id="lbHint">Swipe for more photos</div>
+    <div class="meta" id="lbMeta"></div>
+    <button class="btn save" id="lbSave" type="button">⬇️ Save photo</button>
+    <div class="meta" id="lbSaveMsg" aria-live="polite"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script src="fireworks.js"></script>
+  <script>
+    const ES = window.EventSnap;
+    const $ = (id) => document.getElementById(id);
+    if (ES.demo) $('demoBanner').hidden = false;
+    Fireworks.start({ rate: 0.3 });
+
+    const nameInput = $('name');
+    try { nameInput.value = localStorage.getItem('eventsnap.name') || ''; } catch (e) {}
+    nameInput.addEventListener('input', () => { try { localStorage.setItem('eventsnap.name', nameInput.value); } catch (e) {} });
+
+    let photos = [];
+    function render(list) {
+      photos = list;
+      $('count').textContent = list.length ? list.length + (list.length === 1 ? ' photo' : ' photos') : '';
+      $('empty').hidden = list.length > 0;
+      $('loadError').hidden = true;
+      const grid = $('grid');
+      const known = new Set([...grid.children].map((b) => b.dataset.id));
+      const wanted = new Set(list.map((p) => p.id));
+      [...grid.children].forEach((b) => { if (!wanted.has(b.dataset.id)) b.remove(); });
+      list.slice().reverse().forEach((p) => {
+        if (known.has(p.id)) return;
+        const b = document.createElement('button');
+        b.dataset.id = p.id;
+        b.setAttribute('aria-label', 'Open photo' + (p.uploader ? ' by ' + p.uploader : ''));
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.src = p.thumb || p.url;
+        img.alt = '';
+        b.appendChild(img);
+        b.addEventListener('click', () => openLightbox(p.id));
+        grid.prepend(b);
+      });
+    }
+
+    let lbPhoto = null;
+    $('lbSave').addEventListener('click', async () => {
+      if (!lbPhoto) return;
+      const btn = $('lbSave');
+      btn.disabled = true;
+      $('lbSaveMsg').textContent = '';
+      try { await ES.savePhoto(lbPhoto); }
+      catch (e) { $('lbSaveMsg').textContent = 'Could not save. Press and hold the photo to save it instead.'; }
+      finally { btn.disabled = false; }
+    });
+
+    // Full-size viewer: tap a thumbnail, then swipe (or use the arrows / keyboard) for the next one.
+    function showAt(i) {
+      if (!photos.length) return closeLightbox();
+      const n = photos.length;
+      i = (i + n) % n;
+      const p = photos[i];
+      lbPhoto = p;
+      $('lbSaveMsg').textContent = '';
+      const img = $('lbImg');
+      img.classList.remove('slide-in');
+      img.src = p.thumb || p.url;          // small version appears instantly…
+      const full = new Image();
+      full.onload = () => { if (lbPhoto === p) img.src = p.url; };   // …then the sharp one
+      full.src = p.url;
+      void img.offsetWidth; img.classList.add('slide-in');
+      $('lbMeta').textContent = (p.uploader ? '📷 ' + p.uploader + ' · ' : '') + ES.timeAgo(p.created_at);
+      $('lbCount').textContent = (i + 1) + ' / ' + n;
+      const many = n > 1;
+      $('lbPrev').hidden = $('lbNext').hidden = !many;
+      // Load the neighbours in the background so swiping feels instant.
+      if (many) [photos[(i + 1) % n], photos[(i - 1 + n) % n]].forEach((q) => { new Image().src = q.url; });
+    }
+    function currentIndex() { return lbPhoto ? photos.findIndex((x) => x.id === lbPhoto.id) : -1; }
+    function step(d) { const i = currentIndex(); showAt(i < 0 ? 0 : i + d); }
+    function openLightbox(id) {
+      const i = photos.findIndex((x) => x.id === id);
+      if (i < 0) return;
+      $('lightbox').classList.add('open');
+      document.body.style.overflow = 'hidden';
+      let hinted = false;
+      try { hinted = localStorage.getItem('eventsnap.swipeHint') === 'seen'; localStorage.setItem('eventsnap.swipeHint', 'seen'); } catch (e) {}
+      $('lbHint').hidden = hinted || photos.length < 2;
+      showAt(i);
+    }
+    function closeLightbox() {
+      $('lightbox').classList.remove('open');
+      document.body.style.overflow = '';
+      lbPhoto = null;
+    }
+    $('lbClose').addEventListener('click', closeLightbox);
+    $('lbPrev').addEventListener('click', () => step(-1));
+    $('lbNext').addEventListener('click', () => step(1));
+    $('lightbox').addEventListener('click', (e) => { if (e.target.id === 'lightbox') closeLightbox(); });
+    document.addEventListener('keydown', (e) => {
+      if (!$('lightbox').classList.contains('open')) return;
+      if (e.key === 'ArrowRight') step(1);
+      else if (e.key === 'ArrowLeft') step(-1);
+      else if (e.key === 'Escape') closeLightbox();
+    });
+    // Swipe left/right for next/previous, swipe down to close.
+    let tx = 0, ty = 0, touching = false;
+    $('lightbox').addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) { touching = false; return; }   // ignore pinch-zoom
+      touching = true; tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+    }, { passive: true });
+    $('lightbox').addEventListener('touchend', (e) => {
+      if (!touching) return;
+      touching = false;
+      const dx = e.changedTouches[0].clientX - tx, dy = e.changedTouches[0].clientY - ty;
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) { $('lbHint').hidden = true; step(dx < 0 ? 1 : -1); }
+      else if (dy > 90 && Math.abs(dy) > Math.abs(dx)) closeLightbox();
+    }, { passive: true });
+
+    try { $('consent').checked = localStorage.getItem('eventsnap.consent.' + ES.eventCode) === 'yes'; } catch (e) {}
+    $('consent').addEventListener('change', () => {
+      $('consentErr').hidden = true;
+      try { localStorage.setItem('eventsnap.consent.' + ES.eventCode, $('consent').checked ? 'yes' : 'no'); } catch (e) {}
+    });
+    $('pick').addEventListener('click', () => {
+      if (!$('consent').checked) { $('consentErr').hidden = false; return; }
+      $('file').click();
+    });
+    $('file').addEventListener('change', async (e) => {
+      const files = [...e.target.files].slice(0, 20);
+      e.target.value = '';
+      if (!files.length) return;
+      const btn = $('pick');
+      btn.disabled = true;
+      const prog = $('progress');
+      let done = 0, failed = 0, lastError = '';
+      prog.innerHTML = '<div>Uploading 0 of ' + files.length + '…</div><div class="bar"><div id="barFill"></div></div>';
+      for (const f of files) {
+        try { await ES.uploadPhoto(f, nameInput.value); done++; }
+        catch (err) { failed++; lastError = err.message; }
+        prog.firstChild.textContent = 'Uploading ' + (done + failed) + ' of ' + files.length + '…';
+        $('barFill').style.width = ((done + failed) / files.length * 100) + '%';
+      }
+      prog.innerHTML = (done ? '<div class="ok">✅ ' + done + (done === 1 ? ' photo' : ' photos') + ' added. Thank you!</div>' : '') +
+        (failed ? '<div class="bad">⚠️ ' + failed + ' failed: ' + lastError + '</div>' : '');
+      btn.disabled = false;
+      if (done) Fireworks.burst(5);
+      ES.listPhotos().then(render).catch(() => {});
+    });
+
+    (async () => {
+      try {
+        const ev = await ES.getEvent();
+        const state = ES.eventState(ev);
+        if (state === 'missing') { $('closed').hidden = false; return; }
+        $('eventName').textContent = ev.name;
+        document.title = ev.name + ' · Photo Wall';
+        if (state === 'ended') {
+          $('closedText').textContent = '🪔 This event has ended and its photos have been removed. Thank you for being part of it!';
+          $('closed').hidden = false;
+          return;
+        }
+        $('deleteDate').textContent = ES.formatWhen(ev.view_until, false);
+        $('windows').textContent = state === 'open'
+          ? '📤 Upload until ' + ES.formatWhen(ev.uploads_until, true) + ' · 👀 Photos viewable until ' + ES.formatWhen(ev.view_until, false) + ', then deleted'
+          : '👀 Photos viewable until ' + ES.formatWhen(ev.view_until, false) + ', then deleted';
+        $('windows').hidden = false;
+        if (state === 'open') $('uploader').hidden = false;
+        else $('uploadsClosed').hidden = false;
+        $('gallery').hidden = false;
+        ES.watchPhotos(render, 10000, (err) => { $('loadError').textContent = err.message; $('loadError').hidden = false; });
+      } catch (err) {
+        $('loadError').textContent = err.message;
+        $('loadError').hidden = false;
+      }
+    })();
+  </script>
+</body>
+</html>

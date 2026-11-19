@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Photo Wall Host</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .links a { margin-top: 10px; }
+    .mgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; margin-top: 12px; }
+    .mgrid figure { margin: 0; position: relative; }
+    .mgrid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; display: block; }
+    .mgrid button { position: absolute; top: 4px; right: 4px; border: 0; border-radius: 99px; background: rgba(0,0,0,.7); color: #fff; font-size: 13px; padding: 4px 8px; cursor: pointer; }
+    .mgrid figcaption { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  </style>
+</head>
+<body>
+  <div id="demoBanner" class="demo-banner" hidden>Demo mode: photos stay in this browser only</div>
+  <div class="wrap">
+    <header class="hero">
+      <div class="diyas" aria-hidden="true">🪔</div>
+      <h1>Host tools</h1>
+      <p class="sub" id="evName"></p>
+    </header>
+
+    <section class="card links">
+      <a class="btn secondary" id="lnkGuest" target="_blank">📱 Guest page (what the QR opens)</a>
+      <a class="btn secondary" id="lnkShow" target="_blank">🖥️ Projector slideshow</a>
+      <a class="btn secondary" id="lnkPoster" target="_blank">🖨️ Printable QR poster</a>
+    </section>
+
+    <section class="card">
+      <button class="btn" id="zipBtn" type="button">⬇️ Download all photos (zip)</button>
+      <div class="progress" id="zipProg" aria-live="polite"></div>
+      <button class="btn secondary" id="clearDemo" type="button" hidden>Clear demo photos</button>
+    </section>
+
+    <section class="card">
+      <label class="field" for="pin">Host PIN (needed to hide a photo)</label>
+      <input id="pin" type="password" autocomplete="off" placeholder="Host PIN">
+      <p class="hint">Hidden photos disappear from the gallery and slideshow.</p>
+      <div class="mgrid" id="mgrid"></div>
+      <div class="progress" id="hideMsg" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    const ES = window.EventSnap;
+    const $ = (id) => document.getElementById(id);
+    if (ES.demo) { $('demoBanner').hidden = false; $('clearDemo').hidden = false; }
+    $('lnkGuest').href = ES.pageUrl('index.html');
+    $('lnkShow').href = ES.pageUrl('slideshow.html');
+    $('lnkPoster').href = ES.pageUrl('poster.html');
+    ES.getEvent().then((ev) => {
+      if (!ev) { $('evName').textContent = 'Event not found: ' + ES.eventCode; return; }
+      const label = { open: 'Open for uploads', viewOnly: 'Uploads closed, gallery visible', ended: 'Ended', missing: 'Switched off' }[ES.eventState(ev)];
+      $('evName').textContent = ev.name + ' · code ' + ev.code + ' · ' + label +
+        ' · uploads until ' + ES.formatWhen(ev.uploads_until, true) + ' · viewable until ' + ES.formatWhen(ev.view_until, true);
+    });
+
+    let photos = [];
+    function render(list) {
+      photos = list;
+      const g = $('mgrid');
+      g.innerHTML = '';
+      list.forEach((p) => {
+        const f = document.createElement('figure');
+        const img = document.createElement('img'); img.src = p.thumb || p.url; img.alt = ''; img.loading = 'lazy';
+        const b = document.createElement('button'); b.textContent = 'Hide'; b.type = 'button';
+        b.addEventListener('click', () => hide(p.id));
+        const c = document.createElement('figcaption'); c.textContent = (p.uploader || 'Guest') + ' · ' + ES.timeAgo(p.created_at);
+        f.append(img, b, c);
+        g.appendChild(f);
+      });
+    }
+
+    async function hide(id) {
+      const pin = $('pin').value.trim();
+      if (!ES.demo && !pin) { $('hideMsg').innerHTML = '<span class="bad">Enter the host PIN first.</span>'; $('pin').focus(); return; }
+      try {
+        const ok = await ES.hidePhoto(id, pin);
+        $('hideMsg').innerHTML = ok ? '<span class="ok">Photo hidden.</span>' : '<span class="bad">Wrong PIN.</span>';
+        render(await ES.listPhotos());
+      } catch (e) { $('hideMsg').innerHTML = '<span class="bad">' + e.message + '</span>'; }
+    }
+
+    $('zipBtn').addEventListener('click', async () => {
+      const btn = $('zipBtn'); btn.disabled = true;
+      const prog = $('zipProg');
+      try {
+        const list = await ES.listPhotos();
+        if (!list.length) { prog.textContent = 'No photos yet.'; return; }
+        const zip = new JSZip();
+        let n = 0;
+        for (const p of list.slice().reverse()) {
+          n++;
+          prog.textContent = 'Adding photo ' + n + ' of ' + list.length + '…';
+          const blob = await (await fetch(p.url)).blob();
+          const who = (p.uploader || 'guest').replace(/[^a-z0-9]+/gi, '-').slice(0, 20);
+          zip.file(String(n).padStart(4, '0') + '-' + who + '.jpg', blob);
+        }
+        prog.textContent = 'Making the zip…';
+        const out = await zip.generateAsync({ type: 'blob' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(out);
+        a.download = ES.eventCode + '-photos.zip';
+        a.click();
+        prog.innerHTML = '<span class="ok">Downloaded ' + list.length + ' photos.</span>';
+      } catch (e) {
+        prog.innerHTML = '<span class="bad">Download failed: ' + e.message + '</span>';
+      } finally { btn.disabled = false; }
+    });
+
+    $('clearDemo').addEventListener('click', () => { ES.clearDemo(); render([]); });
+    ES.watchPhotos(render, 15000);
+  </script>
+</body>
+</html>
