@@ -264,11 +264,14 @@
         b.setAttribute('aria-label', (p.on ? 'Will be shared' : 'Left out') + ', photo ' + (i + 1));
         const img = document.createElement('img');
         img.src = p.url; img.alt = ''; img.decoding = 'async';
+        // A file this browser can't open (e.g. some HEIC photos) would fail to upload: leave it out.
+        if (!p.bad) img.addEventListener('error', () => { p.bad = true; p.on = false; drawReview(); }, { once: true });
         const tag = document.createElement('span');
         tag.className = 'tag';
-        tag.textContent = p.on ? '✓' : (p.dup ? 'Already shared' : 'Left out');
+        tag.textContent = p.bad ? "Can't open" : p.on ? '✓' : (p.dup ? 'Already shared' : 'Left out');
+        if (p.bad) { b.classList.add('bad'); img.hidden = true; }
         b.append(img, tag);
-        b.addEventListener('click', () => { p.on = !p.on; drawReview(); });
+        b.addEventListener('click', () => { if (p.bad) return; p.on = !p.on; drawReview(); });
         grid.appendChild(b);
       });
       const n = picked.filter((p) => p.on).length;

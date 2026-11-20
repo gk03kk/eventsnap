@@ -122,3 +122,5 @@ footer a { color: var(--muted); }
 .lb-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .lightbox .btn.remove { background: rgba(255, 138, 138, 0.18); color: var(--cream); border: 1px solid var(--bad); }
 .progress .undo { margin-top: 10px; }
+.review-grid .pick.bad { cursor: not-allowed; background: rgba(255,138,138,.12); border-color: rgba(255,138,138,.4); }
+.review-grid .pick.bad::after { content: "\1F6AB"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 34px; }
