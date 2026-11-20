@@ -225,6 +225,21 @@
     return data === true;
   }
 
+  // Host only: deletes the photo's row and both files for good. Returns 'deleted',
+  // 'filesLeft' (gone from the wall, but a file could not be removed) or 'wrongPin'.
+  async function deletePhotoForGood(id, pin) {
+    if (demo) {
+      demoWrite(demoRead().filter((x) => x.id !== id));
+      return 'deleted';
+    }
+    const { data, error } = await sb.rpc('host_delete_photo', { p_photo_id: id, p_pin: pin });
+    if (error) throw new Error('Could not delete the photo.');
+    if (!data) return 'wrongPin';
+    const paths = [data.path, data.thumb_path].filter(Boolean);
+    const { data: removed, error: rmError } = await sb.storage.from(cfg.BUCKET).remove(paths);
+    return !rmError && removed && removed.length === paths.length ? 'deleted' : 'filesLeft';
+  }
+
   function clearDemo() { localStorage.removeItem(demoKey); }
 
   // Number of visible photos, without downloading the list (a tiny HEAD request).
@@ -282,6 +297,6 @@
 
   window.EventSnap = {
     eventCode, demo, getEvent, eventState, formatWhen, listPhotos, uploadPhoto, savePhoto,
-    hidePhoto, clearDemo, watchPhotos, pageUrl, timeAgo, isMine, deleteMyPhoto,
+    hidePhoto, deletePhotoForGood, clearDemo, watchPhotos, pageUrl, timeAgo, isMine, deleteMyPhoto,
   };
 })();

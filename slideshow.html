@@ -14,8 +14,9 @@
     .slide.show { opacity: 1; }
     .slide img { max-width: 92vw; max-height: 86vh; border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,.6); border: 6px solid var(--gold); }
     .caption { position: fixed; left: 28px; bottom: 24px; font-size: 26px; color: var(--cream); text-shadow: 0 2px 8px #000; }
-    .qrbox { position: fixed; right: 24px; bottom: 24px; background: #fff; color: #1b1035; border-radius: 16px; padding: 12px; text-align: center; font-weight: 700; font-size: 16px; }
-    .qrbox #qr { margin: 0 auto 6px; }
+    .qrbox { position: fixed; right: 14px; bottom: 14px; background: #fff; color: #1b1035; border-radius: 10px; padding: 6px; text-align: center; font-weight: 700; font-size: 11px; opacity: .9; }
+    .qrbox #qr { margin: 0 auto 3px; }
+    .qrbox #qr img, .qrbox #qr canvas { width: 90px; height: 90px; }
     .title { position: fixed; top: 18px; left: 0; right: 0; text-align: center; font-size: 30px; color: var(--gold); text-shadow: 0 2px 8px #000; }
     .waiting { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; font-size: 30px; color: var(--muted); }
     .new { position: fixed; top: 70px; right: 24px; background: var(--pink); color: #fff; padding: 8px 16px; border-radius: 999px; font-weight: 700; opacity: 0; transition: opacity .4s; }
@@ -29,7 +30,7 @@
   <div class="waiting" id="waiting"><div style="font-size:70px">📸</div>Scan the QR code and share your photos!</div>
   <div class="caption" id="caption"></div>
   <div class="new" id="newBadge">✨ New photo!</div>
-  <div class="qrbox"><div id="qr"></div>Scan to add your photos</div>
+  <div class="qrbox"><div id="qr"></div>Add your photos</div>
   <div class="tip">Press F11 for full screen</div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>

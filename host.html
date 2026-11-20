@@ -12,6 +12,7 @@
     .mgrid figure { margin: 0; position: relative; }
     .mgrid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; display: block; }
     .mgrid button { position: absolute; top: 4px; right: 4px; border: 0; border-radius: 99px; background: rgba(0,0,0,.7); color: #fff; font-size: 13px; padding: 4px 8px; cursor: pointer; }
+    .mgrid button.del { top: auto; bottom: 22px; background: rgba(200, 30, 60, .85); }
     .mgrid figcaption { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   </style>
 </head>
@@ -37,9 +38,9 @@
     </section>
 
     <section class="card">
-      <label class="field" for="pin">Host PIN (needed to hide a photo)</label>
+      <label class="field" for="pin">Host PIN (needed to hide or delete a photo)</label>
       <input id="pin" type="password" autocomplete="off" placeholder="Host PIN">
-      <p class="hint">Hidden photos disappear from the gallery and slideshow.</p>
+      <p class="hint"><b>Hide</b> takes a photo off the gallery and slideshow. <b>Delete</b> also removes the file for good — it can't be undone.</p>
       <div class="mgrid" id="mgrid"></div>
       <div class="progress" id="hideMsg" aria-live="polite"></div>
     </section>
@@ -73,8 +74,10 @@
         const img = document.createElement('img'); img.src = p.thumb || p.url; img.alt = ''; img.loading = 'lazy';
         const b = document.createElement('button'); b.textContent = 'Hide'; b.type = 'button';
         b.addEventListener('click', () => hide(p.id));
+        const d = document.createElement('button'); d.textContent = '🗑️ Delete'; d.type = 'button'; d.className = 'del';
+        d.addEventListener('click', () => del(p.id));
         const c = document.createElement('figcaption'); c.textContent = (p.uploader || 'Guest') + ' · ' + ES.timeAgo(p.created_at);
-        f.append(img, b, c);
+        f.append(img, b, d, c);
         g.appendChild(f);
       });
     }
@@ -85,6 +88,19 @@
       try {
         const ok = await ES.hidePhoto(id, pin);
         $('hideMsg').innerHTML = ok ? '<span class="ok">Photo hidden.</span>' : '<span class="bad">Wrong PIN.</span>';
+        render(await ES.listPhotos());
+      } catch (e) { $('hideMsg').innerHTML = '<span class="bad">' + e.message + '</span>'; }
+    }
+
+    async function del(id) {
+      const pin = $('pin').value.trim();
+      if (!ES.demo && !pin) { $('hideMsg').innerHTML = '<span class="bad">Enter the host PIN first.</span>'; $('pin').focus(); return; }
+      if (!confirm('Delete this photo for good? It will be removed from the wall and from storage. This can\'t be undone.')) return;
+      try {
+        const r = await ES.deletePhotoForGood(id, pin);
+        $('hideMsg').innerHTML = r === 'deleted' ? '<span class="ok">Photo deleted for good.</span>'
+          : r === 'wrongPin' ? '<span class="bad">Wrong PIN.</span>'
+          : '<span class="bad">Removed from the wall, but the file could not be deleted from storage. Delete it in Supabase → Storage.</span>';
         render(await ES.listPhotos());
       } catch (e) { $('hideMsg').innerHTML = '<span class="bad">' + e.message + '</span>'; }
     }
