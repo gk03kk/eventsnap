@@ -39,7 +39,21 @@
       </label>
       <p id="consentErr" class="bad" hidden>Please tick the box first.</p>
       <button id="pick" class="btn" type="button">📸 Add photos</button>
-      <p class="hint">Take a new photo or pick from your gallery. No app needed.</p>
+      <p class="hint">Take a new photo or pick from your gallery. You'll check them before anything is shared.</p>
+      <p class="hint">🔒 Location and camera details are removed from every photo.</p>
+
+      <div id="review" class="review" hidden>
+        <div class="review-head">
+          <strong id="reviewTitle">Check your photos</strong>
+          <span class="sub">Tap a photo to leave it out</span>
+        </div>
+        <div id="reviewGrid" class="review-grid"></div>
+        <button id="send" class="btn" type="button">⬆️ Share photos</button>
+        <div class="review-actions">
+          <button id="addMore" class="btn secondary" type="button">➕ Add more</button>
+          <button id="cancelReview" class="btn secondary" type="button">Cancel</button>
+        </div>
+      </div>
       <div id="progress" class="progress" aria-live="polite"></div>
     </section>
 
@@ -69,7 +83,10 @@
     <img id="lbImg" alt="">
     <div class="lb-hint" id="lbHint">Swipe for more photos</div>
     <div class="meta" id="lbMeta"></div>
-    <button class="btn save" id="lbSave" type="button">⬇️ Save photo</button>
+    <div class="lb-actions">
+      <button class="btn save" id="lbSave" type="button">⬇️ Save photo</button>
+      <button class="btn save remove" id="lbRemove" type="button" hidden>🗑️ Remove my photo</button>
+    </div>
     <div class="meta" id="lbSaveMsg" aria-live="polite"></div>
   </div>
 
@@ -107,6 +124,7 @@
         img.src = p.thumb || p.url;
         img.alt = '';
         b.appendChild(img);
+        if (ES.isMine(p.id)) { const t = document.createElement('span'); t.className = 'mine'; t.textContent = 'You'; b.appendChild(t); }
         b.addEventListener('click', () => openLightbox(p.id));
         grid.prepend(b);
       });
@@ -140,11 +158,28 @@
       void img.offsetWidth; img.classList.add('slide-in');
       $('lbMeta').textContent = (p.uploader ? '📷 ' + p.uploader + ' · ' : '') + ES.timeAgo(p.created_at);
       $('lbCount').textContent = (i + 1) + ' / ' + n;
+      $('lbRemove').hidden = !ES.isMine(p.id);
       const many = n > 1;
       $('lbPrev').hidden = $('lbNext').hidden = !many;
       // Load the neighbours in the background so swiping feels instant.
       if (many) [photos[(i + 1) % n], photos[(i - 1 + n) % n]].forEach((q) => { new Image().src = q.url; });
     }
+    $('lbRemove').addEventListener('click', async () => {
+      if (!lbPhoto) return;
+      if (!confirm('Remove this photo from the photo wall for everyone?')) return;
+      const id = lbPhoto.id;
+      $('lbRemove').disabled = true;
+      try {
+        await ES.deleteMyPhoto(id);
+        const i = currentIndex();
+        photos = photos.filter((x) => x.id !== id);
+        const tile = document.querySelector('#grid button[data-id="' + id + '"]');
+        if (tile) tile.remove();
+        render(photos);
+        if (photos.length) showAt(Math.min(i, photos.length - 1)); else closeLightbox();
+      } catch (e) { $('lbSaveMsg').textContent = e.message; }
+      finally { $('lbRemove').disabled = false; }
+    });
     function currentIndex() { return lbPhoto ? photos.findIndex((x) => x.id === lbPhoto.id) : -1; }
     function step(d) { const i = currentIndex(); showAt(i < 0 ? 0 : i + d); }
     function openLightbox(id) {
@@ -191,28 +226,111 @@
       $('consentErr').hidden = true;
       try { localStorage.setItem('eventsnap.consent.' + ES.eventCode, $('consent').checked ? 'yes' : 'no'); } catch (e) {}
     });
-    $('pick').addEventListener('click', () => {
+    // ---- Pick → review (nothing is shared yet) → Share ----
+    const MAX_PICK = 20;
+    const sentKey = 'eventsnap.sent.' + ES.eventCode;   // photos this phone already shared
+    const fileKey = (f) => f.name + '|' + f.size + '|' + f.lastModified;
+    function sentSet() { try { return new Set(JSON.parse(localStorage.getItem(sentKey) || '[]')); } catch (e) { return new Set(); } }
+    function markSent(f) { try { const s = sentSet(); s.add(fileKey(f)); localStorage.setItem(sentKey, JSON.stringify([...s].slice(-500))); } catch (e) {} }
+
+    let picked = [];   // { file, url, on, dup }
+    function openPicker() {
       if (!$('consent').checked) { $('consentErr').hidden = false; return; }
       $('file').click();
-    });
-    $('file').addEventListener('change', async (e) => {
-      const files = [...e.target.files].slice(0, 20);
+    }
+    $('pick').addEventListener('click', openPicker);
+    $('addMore').addEventListener('click', openPicker);
+    $('file').addEventListener('change', (e) => {
+      const already = sentSet();
+      const have = new Set(picked.map((p) => fileKey(p.file)));
+      for (const f of e.target.files) {
+        if (picked.length >= MAX_PICK) break;
+        if (have.has(fileKey(f))) continue;               // picked twice in this round
+        const dup = already.has(fileKey(f));              // shared from this phone before
+        picked.push({ file: f, url: URL.createObjectURL(f), on: !dup, dup });
+      }
       e.target.value = '';
+      $('progress').innerHTML = '';
+      drawReview();
+    });
+    function drawReview() {
+      const grid = $('reviewGrid');
+      grid.innerHTML = '';
+      picked.forEach((p, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pick' + (p.on ? ' on' : '');
+        b.setAttribute('aria-pressed', p.on);
+        b.setAttribute('aria-label', (p.on ? 'Will be shared' : 'Left out') + ', photo ' + (i + 1));
+        const img = document.createElement('img');
+        img.src = p.url; img.alt = ''; img.decoding = 'async';
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = p.on ? '✓' : (p.dup ? 'Already shared' : 'Left out');
+        b.append(img, tag);
+        b.addEventListener('click', () => { p.on = !p.on; drawReview(); });
+        grid.appendChild(b);
+      });
+      const n = picked.filter((p) => p.on).length;
+      $('review').hidden = picked.length === 0;
+      $('pick').hidden = picked.length > 0;
+      $('reviewTitle').textContent = n + ' of ' + picked.length + ' selected';
+      $('send').disabled = n === 0;
+      $('send').textContent = n ? '⬆️ Share ' + n + (n === 1 ? ' photo' : ' photos') : 'Tap photos to select them';
+      $('addMore').hidden = picked.length >= MAX_PICK;
+    }
+    function clearReview() {
+      picked.forEach((p) => URL.revokeObjectURL(p.url));
+      picked = [];
+      drawReview();
+    }
+    $('cancelReview').addEventListener('click', clearReview);
+
+    $('send').addEventListener('click', async () => {
+      const files = picked.filter((p) => p.on).map((p) => p.file);
       if (!files.length) return;
-      const btn = $('pick');
-      btn.disabled = true;
+      clearReview();
+      $('pick').disabled = true;
       const prog = $('progress');
       let done = 0, failed = 0, lastError = '';
-      prog.innerHTML = '<div>Uploading 0 of ' + files.length + '…</div><div class="bar"><div id="barFill"></div></div>';
-      for (const f of files) {
-        try { await ES.uploadPhoto(f, nameInput.value); done++; }
-        catch (err) { failed++; lastError = err.message; }
-        prog.firstChild.textContent = 'Uploading ' + (done + failed) + ' of ' + files.length + '…';
+      const newIds = [];
+      prog.innerHTML = '<div>Sharing 0 of ' + files.length + '…</div><div class="bar"><div id="barFill"></div></div>';
+      const tick = () => {
+        prog.firstChild.textContent = 'Sharing ' + (done + failed) + ' of ' + files.length + '…';
         $('barFill').style.width = ((done + failed) / files.length * 100) + '%';
+      };
+      // Up to 3 at a time: much faster on event Wi-Fi than one by one.
+      const queue = files.slice();
+      async function worker() {
+        while (queue.length) {
+          const f = queue.shift();
+          try { const id = await ES.uploadPhoto(f, nameInput.value); if (id) newIds.push(id); done++; markSent(f); }
+          catch (err) { failed++; lastError = err.message; }
+          tick();
+        }
       }
-      prog.innerHTML = (done ? '<div class="ok">✅ ' + done + (done === 1 ? ' photo' : ' photos') + ' added. Thank you!</div>' : '') +
+      await Promise.all([worker(), worker(), worker()]);
+      prog.innerHTML = (done ? '<div class="ok">✅ ' + done + (done === 1 ? ' photo' : ' photos') + ' shared. Thank you!</div>' : '') +
         (failed ? '<div class="bad">⚠️ ' + failed + ' failed: ' + lastError + '</div>' : '');
-      btn.disabled = false;
+      if (newIds.length) {
+        // Quick undo for an accidental upload. Later, any of your photos can be removed from the photo viewer.
+        const undo = document.createElement('button');
+        undo.type = 'button';
+        undo.className = 'btn secondary undo';
+        undo.textContent = '↩️ Oops, undo ' + (newIds.length === 1 ? 'this photo' : 'these ' + newIds.length + ' photos');
+        undo.addEventListener('click', async () => {
+          undo.disabled = true;
+          let removed = 0;
+          for (const id of newIds) { try { await ES.deleteMyPhoto(id); removed++; } catch (e) {} }
+          prog.innerHTML = removed === newIds.length
+            ? '<div class="ok">↩️ Removed. ' + (removed === 1 ? 'That photo is' : 'Those photos are') + ' no longer on the wall.</div>'
+            : '<div class="bad">⚠️ Could not remove ' + (newIds.length - removed) + '. Try again from the photo viewer.</div>';
+          ES.listPhotos().then(render).catch(() => {});
+        });
+        prog.appendChild(undo);
+        prog.insertAdjacentHTML('beforeend', '<p class="hint">You can also remove any photo you shared later: tap it and choose "Remove my photo".</p>');
+      }
+      $('pick').disabled = false;
       if (done) Fireworks.burst(5);
       ES.listPhotos().then(render).catch(() => {});
     });

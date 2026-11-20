@@ -4,7 +4,7 @@
   const cfg = window.EVENTSNAP_CONFIG || {};
   const params = new URLSearchParams(location.search);
   const eventCode = (params.get('e') || cfg.DEFAULT_EVENT || 'demo').toLowerCase().replace(/[^a-z0-9-]/g, '');
-  const demo = !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY;
+  const demo = params.has('demo') || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY;  // ?demo = try it without touching real photos
   const sb = demo ? null : window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
     auth: { persistSession: false },
   });
@@ -28,6 +28,44 @@
       img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('This file is not a photo we can read')); };
       img.src = url;
     });
+  }
+
+  // Decodes the photo ONCE and makes both sizes from it (big phone photos are slow to decode).
+  // Redrawing on a canvas also drops all EXIF data, including GPS location.
+  async function makeSizes(file) {
+    let src, sw, sh, close = () => {};
+    if (window.createImageBitmap) {
+      try {
+        src = await createImageBitmap(file, { imageOrientation: 'from-image' });
+        sw = src.width; sh = src.height; close = () => src.close();
+      } catch (e) { src = null; }
+    }
+    if (!src) {
+      const url = URL.createObjectURL(file);
+      src = await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => rej(new Error('This file is not a photo we can read'));
+        img.src = url;
+      }).finally(() => URL.revokeObjectURL(url));
+      sw = src.naturalWidth; sh = src.naturalHeight;
+    }
+    const draw = (from, fw, fh, maxSide, quality) => {
+      const s = Math.min(1, maxSide / Math.max(fw, fh));
+      const c = document.createElement('canvas');
+      c.width = Math.round(fw * s); c.height = Math.round(fh * s);
+      const g = c.getContext('2d');
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(from, 0, 0, c.width, c.height);
+      return c;
+    };
+    const big = draw(src, sw, sh, 2048);
+    close();
+    const small = draw(big, big.width, big.height, 400);
+    const toJpeg = (c, q) => new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Could not read this photo'))), 'image/jpeg', q));
+    const [full, thumb] = await Promise.all([toJpeg(big, 0.85), toJpeg(small, 0.72)]);
+    big.width = big.height = 0;   // free memory right away on phones
+    return { full, thumb };
   }
 
   function uuid() {
@@ -87,25 +125,58 @@
     const name = (uploader || '').trim().slice(0, 40) || null;
     if (demo) {
       const blob = await shrinkImage(file, 900, 0.7);
-      const list = demoRead();
       const dataUrl = await blobToDataUrl(blob);
-      list.push({ id: uuid(), url: dataUrl, thumb: dataUrl, uploader: name, created_at: new Date().toISOString(), hidden: false });
+      const list = demoRead();   // read after the await, so photos shared at the same time don't overwrite each other
+      const did = uuid();
+      list.push({ id: did, url: dataUrl, thumb: dataUrl, uploader: name, created_at: new Date().toISOString(), hidden: false });
       demoWrite(list);
-      return;
+      rememberMine(did, uuid());
+      return did;
     }
     // Full photo (2048 px, sharp on any TV) + small thumbnail for the gallery grid.
-    const blob = await shrinkImage(file, 2048, 0.85);
-    const thumb = await shrinkImage(blob, 400, 0.72);
+    const { full: blob, thumb } = await makeSizes(file);
     const id = uuid();
     const path = eventCode + '/' + id + '.jpg';
     const thumbPath = eventCode + '/thumbs/' + id + '.jpg';
-    const up = await sb.storage.from(cfg.BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+    const bucket = sb.storage.from(cfg.BUCKET);
+    const opts = { contentType: 'image/jpeg', upsert: false, cacheControl: '31536000' };  // photos never change: let phones cache them
+    const [up, upThumb] = await Promise.all([bucket.upload(path, blob, opts), bucket.upload(thumbPath, thumb, opts)]);
     if (up.error) throw new Error('Upload failed. Uploads may be closed.');
-    const upThumb = await sb.storage.from(cfg.BUCKET).upload(thumbPath, thumb, { contentType: 'image/jpeg', upsert: false });
-    const ins = await sb.from('photos').insert({
-      event_code: eventCode, path, thumb_path: upThumb.error ? null : thumbPath, uploader: name,
-    });
+    const row = { event_code: eventCode, path, thumb_path: upThumb.error ? null : thumbPath, uploader: name };
+    const token = uuid();   // secret kept only on this phone: lets this guest remove the photo later
+    let ins = await sb.from('photos').insert({ ...row, id, delete_token: token });
+    if (ins.error && /delete_token|column|permission|42501|PGRST204/i.test(ins.error.message + ins.error.code)) {
+      ins = await sb.from('photos').insert(row);   // database without the "remove my photo" update yet
+      if (!ins.error) return null;
+    }
     if (ins.error) throw new Error(/limit/i.test(ins.error.message) ? 'This event has reached its photo limit.' : 'Upload failed. Uploads may be closed.');
+    rememberMine(id, token);
+    return id;
+  }
+
+  // ---------- "my photos": ids + delete tokens kept on this phone only ----------
+  const mineKey = 'eventsnap.mine.' + eventCode;
+  function readMine() { try { return JSON.parse(localStorage.getItem(mineKey) || '{}'); } catch (e) { return {}; } }
+  function rememberMine(id, token) {
+    try { const m = readMine(); m[id] = token; localStorage.setItem(mineKey, JSON.stringify(m)); } catch (e) {}
+  }
+  function isMine(id) { return !!readMine()[id]; }
+
+  // Removes one of this guest's own photos from the wall (for everyone, straight away).
+  async function deleteMyPhoto(id) {
+    const m = readMine();
+    if (!m[id]) throw new Error('Only the phone that shared this photo can remove it.');
+    if (demo) {
+      const list = demoRead();
+      const p = list.find((x) => x.id === id);
+      if (p) p.hidden = true;
+      demoWrite(list);
+    } else {
+      const { error } = await sb.rpc('delete_my_photo', { p_photo_id: id, p_token: m[id] });
+      if (error) throw new Error('Could not remove the photo. Please try again.');
+    }
+    delete m[id];
+    try { localStorage.setItem(mineKey, JSON.stringify(m)); } catch (e) {}
   }
 
   // 'open' (upload + view), 'viewOnly' (uploads closed), 'ended' (nothing), or 'missing'.
@@ -197,7 +268,7 @@
 
   function pageUrl(page) {
     const u = new URL(page, location.href);
-    u.search = '?e=' + encodeURIComponent(eventCode);
+    u.search = '?e=' + encodeURIComponent(eventCode) + (params.has('demo') ? '&demo=' + encodeURIComponent(params.get('demo')) : '');
     return u.toString();
   }
 
@@ -211,6 +282,6 @@
 
   window.EventSnap = {
     eventCode, demo, getEvent, eventState, formatWhen, listPhotos, uploadPhoto, savePhoto,
-    hidePhoto, clearDemo, watchPhotos, pageUrl, timeAgo,
+    hidePhoto, clearDemo, watchPhotos, pageUrl, timeAgo, isMine, deleteMyPhoto,
   };
 })();
